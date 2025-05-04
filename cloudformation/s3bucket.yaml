@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to deploy S3 bucket for data record and S3 bucket to store lambda function zipped code
+
+
+Resources:
+  # Creates a S3 bucket to store CF template and lambda files
+  TemplateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - opensearch-templates-${AccountNumber}
+        - AccountNumber: !Ref AWS::AccountId

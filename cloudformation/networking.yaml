@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to deploy networking related resources
+
+Parameters:
+  TemplateBucket:
+    Type: String
+    Description: Name of the S3 bucket where stack files are being deployed
+    Default: opensearch-templates-1234567890
+
+  ProjectConstants:
+    Type: String
+    Description: Name of the file containing constants for the project
+    Default: constants.yaml
+  
+  IpAddress:
+    Type: String
+    Description: Home IPv4 address to ssh into the bastion host
+    Default: 0.0.0.0/32
+
+
+Mappings:
+  ProjectParameters:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: # s3://<TemplateBucket>/constants.yaml
+          !Join
+            - ''
+            - - 's3://'
+              - !Ref TemplateBucket
+              - '/'
+              - !Ref ProjectConstants
+
+Resources:
+  # VPC for the project
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [ProjectParameters, Network, VpcCidrBlock]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !FindInMap [ProjectParameters, Network, VPCName]
+
+  # Internet Gateway for the project VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Internet Gateway
+
+  IGAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      CidrBlock: !FindInMap [ProjectParameters, Network, PublicCidrBlock]
+      # Select the first available AZ from the region
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: TRUE
+      Tags:
+        - Key: Name
+          Value: Public Subnet
+
+
+  # Private Subnet
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      CidrBlock: !FindInMap [ProjectParameters, Network, PrivateCidrBlock]
+      # Select the first available AZ from the region
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: FALSE
+      Tags:
+        - Key: Name
+          Value: Private Subnet
+
+  # Creates the route table to route traffic for the instance in public subnet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Create the route table to route traffic for the private subnet
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Create security groups for opensearch, lambda, bastion
+  OpenSearchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Allow HTTPS 443 access from Lambda + Bastion
+      SecurityGroupIngress:
+        # Allow HTTPS access from Lambdas
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        # Allow HTTPS access from Bastion Host
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: OpenSearchSG
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Allow Lambda to communicate inside VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: LambdaSG
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Allow SSH and HTTPS to inside VPC
+      SecurityGroupIngress:
+        # Allow SSH from your IP
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref IpAddress
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: BastionSG
+  
+  # Set up a Amazon Elastic Compute Cloud (Amazon EC2) Windows instance as a bastion host to access the Kibana console.
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !FindInMap [ProjectParameters, Bastion, BastionInstanceType]
+      ImageId: !FindInMap [ProjectParameters, Bastion, BastionAMI]
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      KeyName: !FindInMap [ProjectParameters, Bastion, KeyPairName]
+      Tags:
+        - Key: Name
+          Value: BastionHost
+      AssociatePublicIpAddress: true

@@ -1,0 +1,16 @@
+Network:
+  VPCName: "opensearch-vpc"
+  VpcCidrBlock: "10.0.0.0/24" #256 IPs
+  PublicCidrBlock: "10.0.0.0/25" #128 IPs
+  PrivateCidrBlock: "10.0.0.128/25" #128 IPs
+
+Bastion:
+  BastionInstanceType: "t3.micro"
+  BastionAMI: "ami-0b86aaed8ef90e45f" # Amazon Linux 2 AMI
+  KeyPairName: "opensearch-bastion-key-pair"
+
+OpenSearch:
+  OpenSearchInstanceType: "t3.small.elasticsearch"
+  MasterUserName: "KibanaUser"
+  MasterUserPassword: "NewKibanaPassword@123"
+  DomainName: "opensearch-project"

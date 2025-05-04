@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to deploy lambda function for index and search
+
+Parameters:
+  TemplateBucket:
+    Type: String
+    Description: Name of the S3 bucket where stack files are being deployed
+    Default: opensearch-templates-1234567890
+
+  ProjectConstants:
+    Type: String
+    Description: Name of the file containing constants for the project
+    Default: constants.yaml
+
+  VPCStack:
+    Type: String
+    Description: Name of the vpc stack
+    Default: networking
+
+Mappings:
+  ProjectParameters:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: # s3://<TemplateBucket>/constants.yaml
+          !Join
+            - ''
+            - - 's3://'
+              - !Ref TemplateBucket
+              - '/'
+              - !Ref ProjectConstants
+
+Resources:
+  IndexLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: index-lambda-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: AccessRawDataBucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: arn:aws:s3:::raw-data-*/**
+
+
+  IndexLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: index-lambda-function
+      Handler: lambda_index.lambda_handler
+      Runtime: python3.9
+      Role: !Ref IndexLambdaRole 
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref TemplateBucket 
+        S3Key: index_lambda_package.zip
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Join
+                - ''
+                - - !Ref VPCStack
+                  - "PublicSubnet"
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Join
+                - ''
+                - - !Ref VPCStack
+                  - "LambdaSecurityGroup"
+
+
+  IndexLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IndexLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::raw-data-${AWS::AccountId}
+      SourceAccount: !Ref AWS::AccountId
+
+  # Mannually add the notification-configuration to the raw-data S3 bucket
